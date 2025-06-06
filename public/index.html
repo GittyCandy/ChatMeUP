@@ -5,73 +5,116 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Secure Anon Chat</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="app-container">
+  <div class="app-container animate__animated animate__fadeIn">
     <div class="sidebar">
       <div class="header">
-        <h1>Secure Chat</h1>
+        <div class="logo">
+          <i class="fas fa-lock"></i>
+          <h1>SecureChat</h1>
+        </div>
         <div class="user-info">
-          <span id="usernameDisplay">Anonymous</span>
-          <button id="changeUsername"><i class="fas fa-edit"></i></button>
+          <div class="user-avatar">
+            <i class="fas fa-user-secret"></i>
+          </div>
+          <div class="user-details">
+            <span id="usernameDisplay">Anonymous</span>
+            <small id="userStatus">Online</small>
+          </div>
+          <button id="changeUsername"><i class="fas fa-cog"></i></button>
         </div>
       </div>
 
       <div class="rooms-section">
-        <h3>Rooms</h3>
-        <div class="room-list" id="roomList">
-          <div class="room active" data-room="general"># General</div>
-          <div class="room" data-room="random"># Random</div>
+        <div class="section-header">
+          <h3>Rooms</h3>
+          <button id="createRoomBtn" class="icon-btn" title="Create Room">
+            <i class="fas fa-plus"></i>
+          </button>
         </div>
-        <button id="createRoomBtn">+ New Room</button>
+        <div class="room-list" id="roomList">
+          <div class="room active" data-room="general">
+            <i class="fas fa-hashtag"></i>
+            <span>General</span>
+          </div>
+          <div class="room" data-room="random">
+            <i class="fas fa-hashtag"></i>
+            <span>Random</span>
+          </div>
+        </div>
       </div>
 
       <div class="users-section">
-        <h3>Online Users <span id="onlineCount">0</span></h3>
+        <div class="section-header">
+          <h3>Online <span id="onlineCount">0</span></h3>
+        </div>
         <div class="user-list" id="userList"></div>
       </div>
     </div>
 
     <div class="chat-container">
       <div class="chat-header">
-        <h2 id="currentRoom">General</h2>
+        <div class="room-info">
+          <i class="fas fa-hashtag"></i>
+          <h2 id="currentRoom">General</h2>
+        </div>
         <div class="typing-indicator" id="typingIndicator"></div>
       </div>
 
-      <div class="messages" id="messages"></div>
+      <div class="messages" id="messages">
+        <div class="welcome-message animate__animated animate__fadeInUp">
+          <i class="fas fa-lock"></i>
+          <h3>Welcome to SecureChat</h3>
+          <p>Your messages are end-to-end encrypted</p>
+        </div>
+      </div>
 
       <div class="message-input">
         <div class="input-group">
-          <input type="text" id="messageInput" placeholder="Type your message..." />
-          <button id="sendButton"><i class="fas fa-paper-plane"></i></button>
-        </div>
-        <div class="input-options">
-          <button id="attachFile"><i class="fas fa-paperclip"></i></button>
-          <button id="emojiPicker"><i class="far fa-smile"></i></button>
+          <div class="input-options">
+            <button id="emojiPicker"><i class="far fa-smile"></i></button>
+          </div>
+          <input type="text" id="messageInput" placeholder="Type your encrypted message..." />
+          <button id="sendButton" class="send-btn">
+            <i class="fas fa-paper-plane"></i>
+          </button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Modals -->
+  <!-- Username Modal -->
   <div id="usernameModal" class="modal">
-    <div class="modal-content">
-      <h3>Choose a Username</h3>
-      <input type="text" id="usernameInput" placeholder="Anonymous" maxlength="20" />
-      <button id="confirmUsername">Confirm</button>
-    </div>
-  </div>
-
-  <div id="createRoomModal" class="modal">
-    <div class="modal-content">
-      <h3>Create New Room</h3>
-      <input type="text" id="newRoomName" placeholder="Room name" />
-      <button id="confirmCreateRoom">Create</button>
+    <div class="modal-content animate__animated animate__zoomIn">
+      <div class="modal-header">
+        <h3>Set Your Identity</h3>
+        <button class="close-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="avatar-selector">
+          <div class="avatar-option selected" data-avatar="user-secret">
+            <i class="fas fa-user-secret"></i>
+          </div>
+          <div class="avatar-option" data-avatar="robot">
+            <i class="fas fa-robot"></i>
+          </div>
+          <div class="avatar-option" data-avatar="cat">
+            <i class="fas fa-cat"></i>
+          </div>
+        </div>
+        <input type="text" id="usernameInput" placeholder="Anonymous" maxlength="20" />
+      </div>
+      <div class="modal-footer">
+        <button id="confirmUsername" class="btn-primary">Confirm Identity</button>
+      </div>
     </div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
   <script src="chat.js"></script>
 </body>
 </html>

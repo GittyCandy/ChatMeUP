@@ -1,6 +1,8 @@
 const socket = io();
 let currentRoom = 'general';
 let username = `anon-${Math.random().toString(36).slice(2, 6)}`;
+let encryptionKey = '';
+let userAvatar = 'user-secret';
 let isTyping = false;
 let typingTimeout;
 
@@ -20,25 +22,60 @@ const elements = {
   changeUsername: document.getElementById('changeUsername'),
   usernameModal: document.getElementById('usernameModal'),
   createRoomBtn: document.getElementById('createRoomBtn'),
-  createRoomModal: document.getElementById('createRoomModal'),
-  newRoomName: document.getElementById('newRoomName'),
-  confirmCreateRoom: document.getElementById('confirmCreateRoom')
+  closeModal: document.querySelector('.close-modal'),
+  avatarOptions: document.querySelectorAll('.avatar-option')
 };
 
 // Initialize the app
 function init() {
   setupEventListeners();
   joinRoom(currentRoom);
-  showUsernameModal();
+  fetchEncryptionKey();
   fetchRoomHistory(currentRoom);
+
+  // Show welcome message
+  setTimeout(() => {
+    document.querySelector('.welcome-message').classList.add('animate__fadeOut');
+    setTimeout(() => {
+      document.querySelector('.welcome-message').style.display = 'none';
+    }, 500);
+  }, 3000);
+}
+
+// Fetch encryption key from server
+function fetchEncryptionKey() {
+  fetch('/api/encryption-key')
+    .then(res => res.json())
+    .then(data => {
+      encryptionKey = data.key;
+    });
+}
+
+// Encrypt message before sending
+function encryptMessage(message) {
+  if (!encryptionKey) return message;
+  return CryptoJS.AES.encrypt(message, encryptionKey).toString();
+}
+
+// Decrypt received message
+function decryptMessage(encryptedMessage) {
+  if (!encryptionKey) return encryptedMessage;
+  try {
+    const bytes = CryptoJS.AES.decrypt(encryptedMessage, encryptionKey);
+    return bytes.toString(CryptoJS.enc.Utf8) || '[Encrypted Message]';
+  } catch (e) {
+    console.error('Decryption error:', e);
+    return '[Unable to decrypt]';
+  }
 }
 
 // Set up all event listeners
 function setupEventListeners() {
   // Room selection
   elements.roomList.addEventListener('click', (e) => {
-    if (e.target.classList.contains('room')) {
-      const room = e.target.dataset.room;
+    const roomElement = e.target.closest('.room');
+    if (roomElement) {
+      const room = roomElement.dataset.room;
       joinRoom(room);
     }
   });
@@ -57,13 +94,25 @@ function setupEventListeners() {
   // Username management
   elements.changeUsername.addEventListener('click', showUsernameModal);
   elements.confirmUsername.addEventListener('click', setUsername);
-
-  // Room creation
-  elements.createRoomBtn.addEventListener('click', () => {
-    elements.createRoomModal.style.display = 'flex';
+  elements.closeModal.addEventListener('click', () => {
+    elements.usernameModal.style.display = 'none';
   });
 
-  elements.confirmCreateRoom.addEventListener('click', createNewRoom);
+  // Avatar selection
+  elements.avatarOptions.forEach(option => {
+    option.addEventListener('click', () => {
+      elements.avatarOptions.forEach(opt => opt.classList.remove('selected'));
+      option.classList.add('selected');
+      userAvatar = option.dataset.avatar;
+    });
+  });
+
+  // Click outside modal to close
+  window.addEventListener('click', (e) => {
+    if (e.target === elements.usernameModal) {
+      elements.usernameModal.style.display = 'none';
+    }
+  });
 }
 
 // Join a room
@@ -89,7 +138,14 @@ function fetchRoomHistory(room) {
     .then(messages => {
       messages
         .filter(msg => msg.room === room && !msg.isPrivate)
-        .forEach(displayMessage);
+        .forEach(msg => {
+          // Decrypt each message before displaying
+          const decryptedMsg = {
+            ...msg,
+            message: decryptMessage(msg.encryptedMessage)
+          };
+          displayMessage(decryptedMsg);
+        });
       scrollToBottom();
     });
 }
@@ -99,10 +155,12 @@ function sendMessage() {
   const message = elements.messageInput.value.trim();
   if (!message) return;
 
+  // Encrypt the message before sending
+  const encryptedMessage = encryptMessage(message);
+
   socket.emit('chatMessage', {
     room: currentRoom,
-    user: username,
-    message
+    encryptedMessage
   });
 
   elements.messageInput.value = '';
@@ -112,14 +170,17 @@ function sendMessage() {
 // Display a message
 function displayMessage(msg) {
   const messageElement = document.createElement('div');
-  messageElement.className = 'message';
+  messageElement.className = 'message animate__animated animate__fadeInUp';
 
   const isCurrentUser = msg.user === username;
   const messageClass = isCurrentUser ? 'current-user' : '';
 
   messageElement.innerHTML = `
     <div class="message-header">
-      <span class="message-user ${messageClass}">${msg.user}</span>
+      <div class="message-user ${messageClass}">
+        <i class="fas fa-${userAvatar}"></i>
+        <span>${msg.user}</span>
+      </div>
       <span class="message-time" title="${new Date(msg.time).toLocaleString()}">
         ${formatTime(msg.time)}
       </span>
@@ -157,6 +218,7 @@ function handleTyping() {
   if (!isTyping) {
     isTyping = true;
     socket.emit('startTyping', currentRoom);
+    elements.typingIndicator.classList.add('active');
   }
 
   clearTimeout(typingTimeout);
@@ -167,6 +229,7 @@ function resetTyping() {
   if (isTyping) {
     isTyping = false;
     socket.emit('stopTyping', currentRoom);
+    elements.typingIndicator.classList.remove('active');
   }
 }
 
@@ -190,58 +253,60 @@ function setUsername() {
   socket.emit('setUsername', username);
 }
 
-// Room creation
-function createNewRoom() {
-  const roomName = elements.newRoomName.value.trim();
-  if (!roomName) return;
-
-  // Add new room to UI
-  const roomElement = document.createElement('div');
-  roomElement.className = 'room';
-  roomElement.dataset.room = roomName;
-  roomElement.innerHTML = `# ${roomName}`;
-  elements.roomList.appendChild(roomElement);
-
-  // Clean up
-  elements.newRoomName.value = '';
-  elements.createRoomModal.style.display = 'none';
-}
-
 // Socket event listeners
-socket.on('message', displayMessage);
+socket.on('encryptionKey', (key) => {
+  encryptionKey = key;
+});
 
-socket.on('privateMessage', (msg) => {
-  if (msg.recipient === socket.id) {
-    displayMessage(msg);
-  }
+socket.on('message', (encryptedMsg) => {
+  // Decrypt the message before displaying
+  const decryptedMsg = {
+    ...encryptedMsg,
+    message: decryptMessage(encryptedMsg.encryptedMessage)
+  };
+  displayMessage(decryptedMsg);
 });
 
 socket.on('userList', (users) => {
   elements.userList.innerHTML = users.map(user => `
-    <div class="user-item">${user}</div>
+    <div class="user-item">
+      <i class="fas fa-${userAvatar}"></i>
+      <span>${user}</span>
+    </div>
   `).join('');
   elements.onlineCount.textContent = users.length;
 });
 
 socket.on('typing', (user) => {
-  elements.typingIndicator.textContent = `${user} is typing...`;
+  if (user !== username) {
+    elements.typingIndicator.textContent = `${user} is typing...`;
+    elements.typingIndicator.classList.add('active');
+  }
 });
 
 socket.on('stoppedTyping', () => {
-  elements.typingIndicator.textContent = '';
+  elements.typingIndicator.classList.remove('active');
+});
+
+socket.on('userJoined', (user) => {
+  if (user !== username) {
+    showSystemMessage(`${user} joined the room`);
+  }
+});
+
+socket.on('userLeft', (user) => {
+  if (user !== username) {
+    showSystemMessage(`${user} left the room`);
+  }
 });
 
 socket.on('messageDeleted', (messageId) => {
   const messageElement = document.querySelector(`.message [data-id="${messageId}"]`);
   if (messageElement) {
-    messageElement.closest('.message').remove();
-  }
-});
-
-socket.on('messageEdited', ({ id, content }) => {
-  const messageElement = document.querySelector(`.message [data-id="${id}"]`);
-  if (messageElement) {
-    messageElement.closest('.message').querySelector('.message-content').textContent = content;
+    messageElement.closest('.message').classList.add('animate__fadeOut');
+    setTimeout(() => {
+      messageElement.closest('.message').remove();
+    }, 300);
   }
 });
 
@@ -261,24 +326,17 @@ function scrollToBottom() {
   elements.messages.scrollTop = elements.messages.scrollHeight;
 }
 
-function editMessage(msg) {
-  elements.messageInput.value = msg.message;
-  elements.messageInput.focus();
+function showSystemMessage(text) {
+  const systemMsg = document.createElement('div');
+  systemMsg.className = 'system-message animate__animated animate__fadeIn';
+  systemMsg.textContent = text;
+  elements.messages.appendChild(systemMsg);
+  scrollToBottom();
 
-  // Optional: Add a way to confirm the edit
-  const originalSend = elements.sendButton.onclick;
-  elements.sendButton.onclick = function() {
-    const newContent = elements.messageInput.value.trim();
-    if (newContent && newContent !== msg.message) {
-      socket.emit('editMessage', {
-        messageId: msg.id,
-        newContent,
-        room: currentRoom
-      });
-    }
-    elements.messageInput.value = '';
-    elements.sendButton.onclick = originalSend;
-  };
+  setTimeout(() => {
+    systemMsg.classList.add('animate__fadeOut');
+    setTimeout(() => systemMsg.remove(), 500);
+  }, 3000);
 }
 
 // Initialize the app
