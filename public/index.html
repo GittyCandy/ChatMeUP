@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Anon Chat</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="chat-container">
+    <h2>Anon Chat</h2>
+    <select id="roomSelect">
+      <option value="general"># General</option>
+      <option value="random"># Random</option>
+    </select>
+    <ul id="messages"></ul>
+    <input id="user" placeholder="Your name (anon ok)">
+    <input id="message" placeholder="Message" />
+    <button onclick="sendMessage()">Send</button>
+  </div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="chat.js"></script>
+</body>
+</html>
