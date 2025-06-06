@@ -1,54 +1,44 @@
+// utils/messageStorage.js
 const fs = require('fs');
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+
 const filePath = path.join(__dirname, '../messages.json');
 
-function getMessages() {
-  try {
-    const data = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(data || '[]');
-  } catch (err) {
-    return [];
-  }
-}
-
+/**
+ * Save a new message object to messages.json
+ * msg must include: { id, room, user, userId, ciphertext, time }
+ */
 function saveMessage(msg) {
-  const messages = getMessages();
-  messages.push(msg);
-  fs.writeFileSync(filePath, JSON.stringify(messages, null, 2));
+  fs.readFile(filePath, 'utf8', (err, data) => {
+    let messages = [];
+    try {
+      messages = data ? JSON.parse(data) : [];
+    } catch {
+      messages = [];
+    }
+    messages.push(msg);
+    fs.writeFile(filePath, JSON.stringify(messages, null, 2), () => {});
+  });
 }
 
-function deleteMessage(messageId, socketId) {
-  const messages = getMessages();
-  const index = messages.findIndex(m => m.id === messageId && m.senderSocket === socketId);
-  if (index !== -1) {
-    messages.splice(index, 1);
-    fs.writeFileSync(filePath, JSON.stringify(messages, null, 2));
-    return true;
-  }
-  return false;
+/**
+ * Delete a message by ID
+ */
+function deleteMessageById(msgId, callback) {
+  fs.readFile(filePath, 'utf8', (err, data) => {
+    if (err) return callback(err);
+    let messages = [];
+    try {
+      messages = data ? JSON.parse(data) : [];
+    } catch {
+      messages = [];
+    }
+    const filtered = messages.filter(m => m.id !== msgId);
+    fs.writeFile(filePath, JSON.stringify(filtered, null, 2), () => {
+      callback();
+    });
+  });
 }
 
-function editMessage(messageId, socketId, newContent) {
-  const messages = getMessages();
-  const message = messages.find(m => m.id === messageId && m.senderSocket === socketId);
-  if (message) {
-    message.message = newContent;
-    message.edited = true;
-    message.editTime = new Date().toISOString();
-    fs.writeFileSync(filePath, JSON.stringify(messages, null, 2));
-    return message;
-  }
-  return null;
-}
-
-function getRoomHistory(room) {
-  const messages = getMessages();
-  return messages.filter(msg => msg.room === room && !msg.isPrivate);
-}
-
-module.exports = {
-  saveMessage,
-  deleteMessage,
-  editMessage,
-  getRoomHistory
-};
+module.exports = { saveMessage, deleteMessageById };

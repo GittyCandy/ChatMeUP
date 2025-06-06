@@ -1,343 +1,231 @@
+// public/chat.js
+
 const socket = io();
-let currentRoom = 'general';
-let username = `anon-${Math.random().toString(36).slice(2, 6)}`;
-let encryptionKey = '';
-let userAvatar = 'user-secret';
-let isTyping = false;
-let typingTimeout;
 
-// DOM Elements
-const elements = {
-  roomList: document.getElementById('roomList'),
-  messages: document.getElementById('messages'),
-  messageInput: document.getElementById('messageInput'),
-  sendButton: document.getElementById('sendButton'),
-  currentRoom: document.getElementById('currentRoom'),
-  typingIndicator: document.getElementById('typingIndicator'),
-  userList: document.getElementById('userList'),
-  onlineCount: document.getElementById('onlineCount'),
-  usernameDisplay: document.getElementById('usernameDisplay'),
-  usernameInput: document.getElementById('usernameInput'),
-  confirmUsername: document.getElementById('confirmUsername'),
-  changeUsername: document.getElementById('changeUsername'),
-  usernameModal: document.getElementById('usernameModal'),
-  createRoomBtn: document.getElementById('createRoomBtn'),
-  closeModal: document.querySelector('.close-modal'),
-  avatarOptions: document.querySelectorAll('.avatar-option')
-};
+// UI references
+const roomListEl = document.getElementById('roomList');
+const createRoomBtn = document.getElementById('createRoomBtn');
+const newRoomInput = document.getElementById('newRoomInput');
 
-// Initialize the app
-function init() {
-  setupEventListeners();
-  joinRoom(currentRoom);
-  fetchEncryptionKey();
-  fetchRoomHistory(currentRoom);
+const currentRoomNameEl = document.getElementById('currentRoomName');
+const leaveRoomBtn = document.getElementById('leaveRoomBtn');
+const messagesListEl = document.getElementById('messages');
 
-  // Show welcome message
-  setTimeout(() => {
-    document.querySelector('.welcome-message').classList.add('animate__fadeOut');
-    setTimeout(() => {
-      document.querySelector('.welcome-message').style.display = 'none';
-    }, 500);
-  }, 3000);
+const userNameInput = document.getElementById('userNameInput');
+const passphraseInput = document.getElementById('passphraseInput');
+const messageInput = document.getElementById('messageInput');
+const sendBtn = document.getElementById('sendBtn');
+
+// State
+let currentRoom = null;
+let passphrase = null;         // AES passphrase for this room
+let localUserId = null;        // Unique per-browser-client
+let localUserName = '';
+
+// Load or generate a persistent userId
+if (localStorage.getItem('anonChatUserId')) {
+  localUserId = localStorage.getItem('anonChatUserId');
+} else {
+  localUserId = 'u-' + Math.random().toString(36).slice(2, 9);
+  localStorage.setItem('anonChatUserId', localUserId);
 }
 
-// Fetch encryption key from server
-function fetchEncryptionKey() {
-  fetch('/api/encryption-key')
-    .then(res => res.json())
-    .then(data => {
-      encryptionKey = data.key;
-    });
+// Helper: add room to sidebar (if not already)
+function addRoomToList(room) {
+  if ([...roomListEl.children].some(li => li.textContent === room)) return;
+  const li = document.createElement('li');
+  li.textContent = room;
+  li.addEventListener('click', () => joinRoom(room));
+  roomListEl.appendChild(li);
 }
 
-// Encrypt message before sending
-function encryptMessage(message) {
-  if (!encryptionKey) return message;
-  return CryptoJS.AES.encrypt(message, encryptionKey).toString();
-}
-
-// Decrypt received message
-function decryptMessage(encryptedMessage) {
-  if (!encryptionKey) return encryptedMessage;
-  try {
-    const bytes = CryptoJS.AES.decrypt(encryptedMessage, encryptionKey);
-    return bytes.toString(CryptoJS.enc.Utf8) || '[Encrypted Message]';
-  } catch (e) {
-    console.error('Decryption error:', e);
-    return '[Unable to decrypt]';
-  }
-}
-
-// Set up all event listeners
-function setupEventListeners() {
-  // Room selection
-  elements.roomList.addEventListener('click', (e) => {
-    const roomElement = e.target.closest('.room');
-    if (roomElement) {
-      const room = roomElement.dataset.room;
-      joinRoom(room);
-    }
-  });
-
-  // Message sending
-  elements.sendButton.addEventListener('click', sendMessage);
-  elements.messageInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      sendMessage();
-    }
-  });
-
-  // Typing indicators
-  elements.messageInput.addEventListener('input', handleTyping);
-
-  // Username management
-  elements.changeUsername.addEventListener('click', showUsernameModal);
-  elements.confirmUsername.addEventListener('click', setUsername);
-  elements.closeModal.addEventListener('click', () => {
-    elements.usernameModal.style.display = 'none';
-  });
-
-  // Avatar selection
-  elements.avatarOptions.forEach(option => {
-    option.addEventListener('click', () => {
-      elements.avatarOptions.forEach(opt => opt.classList.remove('selected'));
-      option.classList.add('selected');
-      userAvatar = option.dataset.avatar;
-    });
-  });
-
-  // Click outside modal to close
-  window.addEventListener('click', (e) => {
-    if (e.target === elements.usernameModal) {
-      elements.usernameModal.style.display = 'none';
-    }
+// Switch “active” class on sidebar
+function highlightActiveRoom() {
+  [...roomListEl.children].forEach(li => {
+    li.classList.toggle('active', li.textContent === currentRoom);
   });
 }
 
-// Join a room
+// Join (or create) a room
 function joinRoom(room) {
-  // Leave current room
-  socket.emit('leaveRoom', currentRoom);
-
-  // Update UI
-  document.querySelector('.room.active')?.classList.remove('active');
-  document.querySelector(`.room[data-room="${room}"]`).classList.add('active');
-  elements.currentRoom.textContent = room;
-
-  // Clear messages and join new room
-  elements.messages.innerHTML = '';
+  if (!room || room.trim() === '') return;
+  // If already in a room, leave it
+  if (currentRoom) {
+    socket.emit('leaveRoom', currentRoom);
+  }
   currentRoom = room;
-  socket.emit('joinRoom', room);
-}
+  highlightActiveRoom();
+  currentRoomNameEl.textContent = `# ${currentRoom}`;
 
-// Fetch room history
-function fetchRoomHistory(room) {
-  fetch(`/api/messages`)
+  // Prompt for passphrase (never stored in server)
+  passphrase = prompt(`Enter passphrase for room "${currentRoom}":`, '') || '';
+  passphraseInput.value = passphrase;
+
+  // Clear UI
+  messagesListEl.innerHTML = '';
+
+  // Notify server
+  socket.emit('joinRoom', currentRoom);
+
+  // Fetch existing messages from the REST endpoint
+  fetch('/api/messages')
     .then(res => res.json())
-    .then(messages => {
-      messages
-        .filter(msg => msg.room === room && !msg.isPrivate)
-        .forEach(msg => {
-          // Decrypt each message before displaying
-          const decryptedMsg = {
-            ...msg,
-            message: decryptMessage(msg.encryptedMessage)
-          };
-          displayMessage(decryptedMsg);
-        });
-      scrollToBottom();
+    .then(allMsgs => {
+      // Filter by this room
+      const roomMsgs = allMsgs.filter(m => m.room === currentRoom);
+      // Decrypt & display each
+      roomMsgs.forEach(m => {
+        try {
+          const bytes = CryptoJS.AES.decrypt(m.ciphertext, passphrase);
+          const plaintext = bytes.toString(CryptoJS.enc.Utf8);
+          if (!plaintext) throw new Error('Decryption failed');
+          showMessage({
+            id: m.id,
+            user: m.user,
+            userId: m.userId,
+            text: plaintext,
+            time: m.time,
+          });
+        } catch {
+          // If decryption fails, show a placeholder
+          showMessage({
+            id: m.id,
+            user: m.user,
+            userId: m.userId,
+            text: '[Unable to decrypt message]',
+            time: m.time,
+          });
+        }
+      });
     });
 }
 
-// Send a message
-function sendMessage() {
-  const message = elements.messageInput.value.trim();
-  if (!message) return;
+// Leave room
+leaveRoomBtn.addEventListener('click', () => {
+  if (!currentRoom) return;
+  socket.emit('leaveRoom', currentRoom);
+  currentRoom = null;
+  passphrase = null;
+  currentRoomNameEl.textContent = '—';
+  messagesListEl.innerHTML = '';
+  highlightActiveRoom();
+});
 
-  // Encrypt the message before sending
-  const encryptedMessage = encryptMessage(message);
+// Create/join button
+createRoomBtn.addEventListener('click', () => {
+  const newRoom = newRoomInput.value.trim();
+  if (!newRoom) return;
+  addRoomToList(newRoom);
+  newRoomInput.value = '';
+  joinRoom(newRoom);
+});
 
-  socket.emit('chatMessage', {
-    room: currentRoom,
-    encryptedMessage
-  });
-
-  elements.messageInput.value = '';
-  resetTyping();
-}
-
-// Display a message
-function displayMessage(msg) {
-  const messageElement = document.createElement('div');
-  messageElement.className = 'message animate__animated animate__fadeInUp';
-
-  const isCurrentUser = msg.user === username;
-  const messageClass = isCurrentUser ? 'current-user' : '';
-
-  messageElement.innerHTML = `
-    <div class="message-header">
-      <div class="message-user ${messageClass}">
-        <i class="fas fa-${userAvatar}"></i>
-        <span>${msg.user}</span>
-      </div>
-      <span class="message-time" title="${new Date(msg.time).toLocaleString()}">
-        ${formatTime(msg.time)}
-      </span>
-      ${isCurrentUser ? `
-        <div class="message-actions">
-          <button class="message-action edit-btn" data-id="${msg.id}">
-            <i class="fas fa-edit"></i>
-          </button>
-          <button class="message-action delete-btn" data-id="${msg.id}">
-            <i class="fas fa-trash"></i>
-          </button>
-        </div>
-      ` : ''}
-    </div>
-    <div class="message-content">${msg.message}</div>
-  `;
-
-  elements.messages.appendChild(messageElement);
-  scrollToBottom();
-
-  // Add event listeners for message actions
-  if (isCurrentUser) {
-    messageElement.querySelector('.delete-btn').addEventListener('click', () => {
-      socket.emit('deleteMessage', { messageId: msg.id, room: currentRoom });
-    });
-
-    messageElement.querySelector('.edit-btn').addEventListener('click', () => {
-      editMessage(msg);
-    });
-  }
-}
-
-// Handle typing indicators
-function handleTyping() {
-  if (!isTyping) {
-    isTyping = true;
-    socket.emit('startTyping', currentRoom);
-    elements.typingIndicator.classList.add('active');
-  }
-
-  clearTimeout(typingTimeout);
-  typingTimeout = setTimeout(resetTyping, 2000);
-}
-
-function resetTyping() {
-  if (isTyping) {
-    isTyping = false;
-    socket.emit('stopTyping', currentRoom);
-    elements.typingIndicator.classList.remove('active');
-  }
-}
-
-// Username management
-function showUsernameModal() {
-  elements.usernameModal.style.display = 'flex';
-  elements.usernameInput.value = username;
-  elements.usernameInput.focus();
-}
-
-function setUsername() {
-  const newUsername = elements.usernameInput.value.trim() || username;
-  if (newUsername.length > 20) {
-    alert('Username must be 20 characters or less');
+// Send a new message
+sendBtn.addEventListener('click', () => {
+  if (!currentRoom) {
+    alert('Join a room first.');
     return;
   }
+  const rawText = messageInput.value.trim();
+  if (!rawText) return;
 
-  username = newUsername;
-  elements.usernameDisplay.textContent = username;
-  elements.usernameModal.style.display = 'none';
-  socket.emit('setUsername', username);
-}
+  localUserName = userNameInput.value.trim() || `anon-${localUserId.slice(-4)}`;
 
-// Socket event listeners
-socket.on('encryptionKey', (key) => {
-  encryptionKey = key;
-});
+  // Encrypt the message content with AES (client-side)
+  const ciphertext = CryptoJS.AES.encrypt(rawText, passphrase).toString();
 
-socket.on('message', (encryptedMsg) => {
-  // Decrypt the message before displaying
-  const decryptedMsg = {
-    ...encryptedMsg,
-    message: decryptMessage(encryptedMsg.encryptedMessage)
+  // Build the message object
+  const msgObj = {
+    id: 'm-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+    room: currentRoom,
+    user: localUserName,
+    userId: localUserId,
+    ciphertext,
+    time: new Date().toISOString(),
   };
-  displayMessage(decryptedMsg);
+
+  // Emit to server
+  socket.emit('chatMessage', msgObj);
+
+  // Locally show your own plaintext version
+  showMessage({
+    id: msgObj.id,
+    user: msgObj.user,
+    userId: msgObj.userId,
+    text: rawText,
+    time: msgObj.time,
+  });
+
+  messageInput.value = '';
 });
 
-socket.on('userList', (users) => {
-  elements.userList.innerHTML = users.map(user => `
-    <div class="user-item">
-      <i class="fas fa-${userAvatar}"></i>
-      <span>${user}</span>
-    </div>
-  `).join('');
-  elements.onlineCount.textContent = users.length;
-});
-
-socket.on('typing', (user) => {
-  if (user !== username) {
-    elements.typingIndicator.textContent = `${user} is typing...`;
-    elements.typingIndicator.classList.add('active');
+// When a new message arrives via socket
+socket.on('newMessage', m => {
+  // Only show if it’s for this room
+  if (m.room !== currentRoom) return;
+  // Attempt to decrypt
+  let plaintext;
+  try {
+    const bytes = CryptoJS.AES.decrypt(m.ciphertext, passphrase);
+    plaintext = bytes.toString(CryptoJS.enc.Utf8);
+    if (!plaintext) throw new Error('Bad passphrase');
+  } catch {
+    plaintext = '[Unable to decrypt]';
   }
+  showMessage({
+    id: m.id,
+    user: m.user,
+    userId: m.userId,
+    text: plaintext,
+    time: m.time,
+  });
 });
 
-socket.on('stoppedTyping', () => {
-  elements.typingIndicator.classList.remove('active');
+// When a message is deleted
+socket.on('messageDeleted', msgId => {
+  const el = document.getElementById(msgId);
+  if (el) el.remove();
 });
 
-socket.on('userJoined', (user) => {
-  if (user !== username) {
-    showSystemMessage(`${user} joined the room`);
+// Render a single message in the list
+function showMessage({ id, user, userId, text, time }) {
+  // Create <li>
+  const li = document.createElement('li');
+  li.id = id;
+
+  // Meta line (username + timestamp)
+  const metaDiv = document.createElement('div');
+  metaDiv.classList.add('msg-meta');
+  metaDiv.textContent = `[${new Date(time).toLocaleTimeString()}] ${user}`;
+
+  // Text line
+  const textDiv = document.createElement('div');
+  textDiv.classList.add('msg-text');
+  textDiv.textContent = text;
+
+  li.appendChild(metaDiv);
+  li.appendChild(textDiv);
+
+  // If this client is the author, add a delete button
+  if (userId === localUserId) {
+    const delBtn = document.createElement('button');
+    delBtn.classList.add('delete-btn');
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', () => {
+      if (confirm('Delete this message?')) {
+        // Emit to server
+        socket.emit('deleteMessage', id);
+        // Also fire REST DELETE (optional, since server socket handler updates the file)
+        fetch(`/api/messages/${id}`, { method: 'DELETE' });
+      }
+    });
+    li.appendChild(delBtn);
   }
-});
 
-socket.on('userLeft', (user) => {
-  if (user !== username) {
-    showSystemMessage(`${user} left the room`);
-  }
-});
-
-socket.on('messageDeleted', (messageId) => {
-  const messageElement = document.querySelector(`.message [data-id="${messageId}"]`);
-  if (messageElement) {
-    messageElement.closest('.message').classList.add('animate__fadeOut');
-    setTimeout(() => {
-      messageElement.closest('.message').remove();
-    }, 300);
-  }
-});
-
-// Helper functions
-function formatTime(timestamp) {
-  const now = new Date();
-  const messageTime = new Date(timestamp);
-  const diff = now - messageTime;
-
-  if (diff < 60000) return 'Just now';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return messageTime.toLocaleDateString();
+  messagesListEl.appendChild(li);
+  // Auto-scroll
+  messagesListEl.scrollTop = messagesListEl.scrollHeight;
 }
 
-function scrollToBottom() {
-  elements.messages.scrollTop = elements.messages.scrollHeight;
-}
-
-function showSystemMessage(text) {
-  const systemMsg = document.createElement('div');
-  systemMsg.className = 'system-message animate__animated animate__fadeIn';
-  systemMsg.textContent = text;
-  elements.messages.appendChild(systemMsg);
-  scrollToBottom();
-
-  setTimeout(() => {
-    systemMsg.classList.add('animate__fadeOut');
-    setTimeout(() => systemMsg.remove(), 500);
-  }, 3000);
-}
-
-// Initialize the app
-document.addEventListener('DOMContentLoaded', init);
+// On page load: you can prepopulate a “General” room
+addRoomToList('general');

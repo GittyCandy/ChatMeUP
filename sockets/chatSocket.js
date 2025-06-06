@@ -1,82 +1,32 @@
-const { saveMessage, deleteMessage, editMessage } = require('../utils/messageStorage');
-const { sanitizeInput } = require('../utils/security');
-const { encryptMessage } = require('../utils/crypto');
+// sockets/chatSocket.js
+const { saveMessage, deleteMessageById } = require('../utils/messageStorage');
 
-module.exports = function (io, ENCRYPTION_KEY) {
-  const activeUsers = new Map();
-  const typingUsers = new Map();
-  const userRooms = new Map();
-
+module.exports = function (io) {
   io.on('connection', socket => {
-    console.log(`New client: ${socket.id}`);
+    console.log(`New client connected: ${socket.id}`);
 
-    // Send encryption key to the client
-    socket.emit('encryptionKey', ENCRYPTION_KEY);
-
-    socket.on('setUsername', (username) => {
-      const cleanUsername = sanitizeInput(username) || `anon-${Math.random().toString(36).slice(2, 6)}`;
-      activeUsers.set(socket.id, cleanUsername);
-      updateUserList();
-    });
-
-    socket.on('joinRoom', (room) => {
-      // Leave previous room if any
-      if (userRooms.has(socket.id)) {
-        const prevRoom = userRooms.get(socket.id);
-        socket.leave(prevRoom);
-        io.to(prevRoom).emit('userLeft', activeUsers.get(socket.id));
-      }
-
+    // When a client explicitly “joins” a room
+    socket.on('joinRoom', room => {
       socket.join(room);
-      userRooms.set(socket.id, room);
-      io.to(room).emit('userJoined', activeUsers.get(socket.id));
-      updateUserList(room);
-
-      // Send room history
-      socket.emit('roomHistory', getRoomHistory(room));
+      console.log(`Socket ${socket.id} joined room ${room}`);
     });
 
-    socket.on('chatMessage', ({ room, encryptedMessage }) => {
-      const user = activeUsers.get(socket.id);
-      const msg = {
-        id: generateId(),
-        room,
-        user,
-        encryptedMessage,
-        time: new Date().toISOString(),
-        senderSocket: socket.id
-      };
-
-      io.to(room).emit('message', msg);
+    // When a client sends a new chat message
+    socket.on('chatMessage', msg => {
+      // msg should already contain: { id, room, user, userId, ciphertext, time }
+      // Simply broadcast back to everyone in that room
+      io.to(msg.room).emit('newMessage', msg);
+      // Save to disk
       saveMessage(msg);
     });
 
-      if (isPrivate && recipient) {
-        socket.to(recipient).emit('privateMessage', msg);
-      } else {
-        io.to(room).emit('message', msg);
-      }
-      saveMessage(msg);
-    });
-
-
-function updateUserList(room) {
-    const usersInRoom = {};
-
-    // Get all sockets in each room
-    if (room) {
-      const socketsInRoom = io.sockets.adapter.rooms.get(room) || new Set();
-      socketsInRoom.forEach(socketId => {
-        usersInRoom[socketId] = activeUsers.get(socketId);
+    // When a client deletes a message
+    socket.on('deleteMessage', msgId => {
+      // Remove from JSON storage
+      deleteMessageById(msgId, () => {
+        // Broadcast to all clients: remove this msgId
+        io.emit('messageDeleted', msgId);
       });
-      io.to(room).emit('userList', Object.values(usersInRoom));
-    } else {
-      io.emit('userList', Array.from(activeUsers.values()));
-    }
-  }
-
+    });
+  });
 };
-
-
-
-
